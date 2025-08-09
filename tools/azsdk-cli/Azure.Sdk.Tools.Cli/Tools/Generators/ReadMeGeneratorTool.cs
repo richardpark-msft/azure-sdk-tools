@@ -8,7 +8,9 @@ using System.Text.RegularExpressions;
 using Azure.AI.OpenAI;
 using Azure.Sdk.Tools.Cli.Commands;
 using Azure.Sdk.Tools.Cli.Contract;
+using Azure.Sdk.Tools.Cli.Microagents;
 using Azure.Sdk.Tools.Cli.Services;
+using Microsoft.AspNetCore.Mvc;
 using OpenAI.Chat;
 
 namespace Azure.Sdk.Tools.Cli.Tools
@@ -20,7 +22,7 @@ namespace Azure.Sdk.Tools.Cli.Tools
         private readonly ILogger<ReadMeGeneratorTool> logger;
         private readonly IOutputService output;
         private readonly AzureOpenAIClient openAiClient;
-
+        private readonly IMicroagentHostService microAgentHostService;
         private Option<string> packagePathOption = new(
                 name: "--package-path",
                 getDefaultValue: () => ".",
@@ -56,12 +58,12 @@ namespace Azure.Sdk.Tools.Cli.Tools
             IsRequired = true,
         };
 
-        public ReadMeGeneratorTool(ILogger<ReadMeGeneratorTool> logger, IOutputService output, AzureOpenAIClient openAiClient)
+        public ReadMeGeneratorTool(ILogger<ReadMeGeneratorTool> logger, IOutputService output, AzureOpenAIClient openAiClient, IMicroagentHostService microAgentHostService)
         {
             this.logger = logger;
             this.output = output;
             this.openAiClient = openAiClient;
-
+            this.microAgentHostService = microAgentHostService;
             this.CommandHierarchy = [SharedCommandGroups.Generators];
         }
 
@@ -121,6 +123,77 @@ namespace Azure.Sdk.Tools.Cli.Tools
             }
         }
 
+        public record ValidationResult(bool Valid, string ValidationFailures);
+
+        public record ValidationArgs(string MarkdownText);
+
+        public class VerifyLinksTool(string repoPath, ILogger<ReadMeGeneratorTool> logger)
+            : AgentTool<ValidationArgs, ValidationResult>
+        {
+            private readonly string repoPath = repoPath;
+            private readonly ILogger<ReadMeGeneratorTool> logger = logger;
+
+            public override string Name { get; init; } = "verify_links";
+
+            public override string Description { get; init; } = "verifies links in markdown content";
+
+            public override async Task<ValidationResult> InvokeAsync(ValidationArgs args, CancellationToken ct = default)
+            {
+                var tempFilePath = Path.GetTempFileName();
+                await File.WriteAllTextAsync(tempFilePath, args.MarkdownText, ct);
+
+                var verifyLinksPs1 = Path.Join(repoPath, "eng", "common", "scripts", "Verify-Links.ps1");
+
+                Console.WriteLine($"====> {verifyLinksPs1}");
+
+                logger.LogInformation("Running {VerifyLinksPs1} {ReadmePath}", verifyLinksPs1, tempFilePath);
+
+                var process = Process.Start(new ProcessStartInfo()
+                {
+                    FileName = RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? "pwsh.exe" : "pwsh",
+                    ArgumentList = { verifyLinksPs1, tempFilePath },
+                    RedirectStandardError = true,
+                    RedirectStandardOutput = true
+                });
+
+                using var verifyLinksCt = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                verifyLinksCt.CancelAfter(TimeSpan.FromSeconds(60)); // Set your time limit here
+
+                await process!.WaitForExitAsync(verifyLinksCt.Token);
+
+                if (process.ExitCode != 0)
+                {
+                    var stderr = await process.StandardError.ReadToEndAsync(ct);
+                    var stdout = await process.StandardOutput.ReadToEndAsync(ct);
+
+                    return new ValidationResult(false, $"Verify-Links.ps1 check did not pass.\nStdout: {stdout.Replace("\n", "\n  ")}\nStderr: {stderr.Replace("\n", "\n  ")}");
+                }
+
+                return new ValidationResult(true, string.Empty);
+            }
+        }
+
+
+        public record WriteFinalReadmeToolResult(bool Written);
+
+        public record WriteFinalReadmeToolArgs(string ReadmeText);
+
+        public class WriteFinalReadmeTool(string outputPath, ILogger<ReadMeGeneratorTool> logger)
+                    : AgentTool<WriteFinalReadmeToolArgs, WriteFinalReadmeToolResult>
+        {
+            private readonly ILogger<ReadMeGeneratorTool> logger = logger;
+
+            public override string Name { get; init; } = "write_final_readme";
+
+            public override string Description { get; init; } = "writes the final contents of a validated readme";
+
+            public override async Task<WriteFinalReadmeToolResult> InvokeAsync(WriteFinalReadmeToolArgs args, CancellationToken ct = default)
+            {
+                await File.WriteAllTextAsync(outputPath, args.ReadmeText, ct);
+                return new WriteFinalReadmeToolResult(true);
+            }
+        }
+
         /// <summary>
         /// Generates a readme.md file.
         /// </summary>
@@ -148,26 +221,30 @@ namespace Azure.Sdk.Tools.Cli.Tools
 
             var readmeText = await File.ReadAllTextAsync(templatePath, ct);
 
-            var messages = new ChatMessage[]{
-                new SystemChatMessage(
-                    """
-                    We're going to create some READMEs.
-                    The parameters are:
-                    * A URL that contains service documentation, to be used when creating key concepts, an introduction blurb and any other places where conceptual docs are needed
-                    * A package path that we can use to generate documentation links
-                    Here are some more rules to follow:
-                    - Do not touch the following sections, or its subsections: Contributing.
-                    - Do not generate sample code.
-                    - Rules for proper readmes can be found here: https://github.com/Azure/azure-sdk/blob/main/docs/policies/README-TEMPLATE.md
-                    """
-                ),
-                new SystemChatMessage($"The readme template is this: {readmeText} which we fill in with the user parameters, which follow:"),
-                new UserChatMessage($"Service URL: {serviceDocumentation}"),
-                new UserChatMessage($"Package path: {packagePath}")
-            };
+            var microAgent = new Microagent<string>($"""
+                We're going to create some READMEs.
+                The parameters are:
+                *A URL that contains service documentation, to be used when creating key concepts, an introduction blurb and any other places where conceptual docs are needed
+                * A package path that we can use to generate documentation links
+                Here are some more rules to follow:
+                - Do not touch the following sections, or its subsections: Contributing.
+                - Do not generate sample code.
+                - Rules for proper readmes can be found here: https://github.com/Azure/azure-sdk/blob/main/docs/policies/README-TEMPLATE.md
+                - The readme should have valid links, verified by the verify_links tool.
+                - If verify_links returns validation errors, regenerate the readme with variations until that goes away.
+                - Otherwise, write the final readme contents to write_final_readme and call Exit.
+                
+                The readme template is this: {readmeText} which we fill in with the user parameters, which follow:
+                Service URL: {serviceDocumentation}
+                Package path: {packagePath}
+                """, [
+                    new VerifyLinksTool(repoPath, logger),
+                    new WriteFinalReadmeTool(outputPath, logger),
+                ], MaxIterations: 2);
 
-            var response = await chatClient.CompleteChatAsync(messages);
-            var generatedReadmeText = Customize(response.Value.Content[0].Text);
+            var result = await microAgentHostService.RunAgentToCompletionAsync(microAgent, ct);
+
+            var generatedReadmeText = Customize(result);
 
             await File.WriteAllTextAsync(outputPath, generatedReadmeText, ct);
 
