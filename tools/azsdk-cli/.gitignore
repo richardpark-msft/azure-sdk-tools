@@ -4,6 +4,7 @@ obj/
 *.dll
 *.exe
 *.pdb
+*.deps.json
 
 # User-specific files
 *.suo
@@ -24,3 +25,6 @@ TestResults/
 
 # Generated metadata files (for testing)
 metadata.json
+
+# Note: AzSdkCli.Cmdlets.dll in PowerShell/ directory is distribution copy
+!PowerShell/AzSdkCli.Cmdlets.dll
