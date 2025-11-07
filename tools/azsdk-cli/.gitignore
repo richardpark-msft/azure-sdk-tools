@@ -1,0 +1,26 @@
+# Build artifacts
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Test results
+TestResults/
+*.trx
+
+# IDE files
+.vs/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Generated metadata files (for testing)
+metadata.json
