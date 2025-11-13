@@ -10,7 +10,7 @@ namespace Azure.Sdk.Tools.Cli.Services.Languages;
 /// Uses tools like go build, go test, go mod, gofmt, etc. for Go development workflows.
 /// </summary>
 public partial class GoLanguageService : LanguageService
-{    
+{
 
     #region Go specific functions, not part of the LanguageRepoService
 
@@ -18,9 +18,22 @@ public partial class GoLanguageService : LanguageService
     {
         try
         {
-            var compilerExists = (await processHelper.Run(new ProcessOptions(compilerName, ["version"], compilerNameWindows, ["version"]), ct)).ExitCode == 0;
-            var linterExists = (await processHelper.Run(new ProcessOptions(linterName, ["--version"], linterNameWindows, ["--version"]), ct)).ExitCode == 0;
-            var formatterExists = (await processHelper.Run(new ProcessOptions("echo", ["package main", "|", formatterName]), ct)).ExitCode == 0;
+            var compilerExists = (await processHelper.Run(new ProcessOptions(unix: goUnix, win: goWin, ["version"]), ct)).ExitCode == 0;
+            var linterExists = (await processHelper.Run(new ProcessOptions(unix: golangCILintUnix, win: goLangCILintWin, ["--version"]), ct)).ExitCode == 0;
+
+            var tempFilePath = Path.GetTempFileName();
+            bool formatterExists;
+
+            try
+            {
+                await File.WriteAllTextAsync(tempFilePath, "package main", ct);
+                formatterExists = (await processHelper.Run(new ProcessOptions(unix: goFmtUnix, win: goFmtWin, [tempFilePath]), ct)).ExitCode == 0;
+            }
+            finally
+            {
+                File.Delete(tempFilePath);
+            }
+
             return compilerExists && linterExists && formatterExists;
         }
         catch (Exception ex)
@@ -34,7 +47,11 @@ public partial class GoLanguageService : LanguageService
     {
         try
         {
-            var result = await processHelper.Run(new ProcessOptions(compilerName, ["mod", "init", moduleName], compilerNameWindows, ["mod", "init", moduleName], workingDirectory: packagePath), ct);
+            var result = await processHelper.Run(new ProcessOptions(
+                unix: goUnix,
+                win: goWin,
+                ["mod", "init", moduleName], workingDirectory: packagePath), ct);
+
             return new PackageCheckResponse(result);
         }
         catch (Exception ex)
@@ -51,14 +68,24 @@ public partial class GoLanguageService : LanguageService
         try
         {
             // Update all dependencies to the latest first
-            var updateResult = await processHelper.Run(new ProcessOptions(compilerName, ["get", "-u", "all"], compilerNameWindows, ["get", "-u", "all"], workingDirectory: packagePath), ct);
+            var updateResult = await processHelper.Run(new ProcessOptions(
+                unix: goUnix,
+                win: goWin,
+                args: ["get", "-u", "all"],
+                workingDirectory: packagePath), ct);
+
             if (updateResult.ExitCode != 0)
             {
                 return new PackageCheckResponse(updateResult);
             }
 
             // Now tidy, to cleanup any deps that aren't needed
-            var tidyResult = await processHelper.Run(new ProcessOptions(compilerName, ["mod", "tidy"], compilerNameWindows, ["mod", "tidy"], workingDirectory: packagePath), ct);
+            var tidyResult = await processHelper.Run(new ProcessOptions(
+                unix: goUnix,
+                win: goWin,
+                args: ["mod", "tidy"],
+                workingDirectory: packagePath), ct);
+
             return new PackageCheckResponse(tidyResult);
         }
         catch (Exception ex)
@@ -72,8 +99,9 @@ public partial class GoLanguageService : LanguageService
         try
         {
             var result = await processHelper.Run(new ProcessOptions(
-                formatterName, ["-w", "."],
-                formatterNameWindows, ["-w", "."],
+                unix: goFmtUnix,
+                win: goFmtWin,
+                ["-w", "."],
                 workingDirectory: packagePath
             ), ct);
             return new PackageCheckResponse(result);
@@ -89,7 +117,10 @@ public partial class GoLanguageService : LanguageService
     {
         try
         {
-            var result = await processHelper.Run(new ProcessOptions(linterName, ["run"], linterNameWindows, ["run"], workingDirectory: packagePath), ct);
+            var result = await processHelper.Run(new ProcessOptions(
+                unix: golangCILintUnix,
+                win: goLangCILintWin,
+                ["run"], workingDirectory: packagePath), ct);
             return new PackageCheckResponse(result);
         }
         catch (Exception ex)
@@ -103,7 +134,11 @@ public partial class GoLanguageService : LanguageService
     {
         try
         {
-            var result = await processHelper.Run(new ProcessOptions(compilerName, ["build"], compilerNameWindows, ["build"], workingDirectory: packagePath), ct);
+            var result = await processHelper.Run(new ProcessOptions(
+                unix: goUnix,
+                win: goWin,
+                ["build"], workingDirectory: packagePath), ct);
+
             return new PackageCheckResponse(result);
         }
         catch (Exception ex)
@@ -143,7 +178,10 @@ public partial class GoLanguageService : LanguageService
     {
         try
         {
-            var result = await processHelper.Run(new ProcessOptions(compilerName, ["test", "-v", "-timeout", "1h", "./..."], compilerNameWindows, ["test", "-v", "-timeout", "1h", "./..."], workingDirectory: packagePath), ct);
+            var result = await processHelper.Run(new ProcessOptions(
+                unix: goUnix,
+                win: goWin,
+                ["test", "-v", "-timeout", "1h", "./..."], workingDirectory: packagePath), ct);
             return result.ExitCode == 0;
         }
         catch (Exception ex)

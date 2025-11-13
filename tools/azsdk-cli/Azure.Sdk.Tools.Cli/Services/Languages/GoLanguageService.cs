@@ -29,12 +29,13 @@ public partial class GoLanguageService : LanguageService
         base.commonValidationHelpers = commonValidationHelpers;
     }
 
-    private readonly string compilerName = "go";
-    private readonly string compilerNameWindows = "go.exe";
-    private readonly string formatterName = "goimports";
-    private readonly string formatterNameWindows = "gofmt.exe";
-    private readonly string linterName = "golangci-lint";
-    private readonly string linterNameWindows = "golangci-lint.exe";
+    private readonly string goUnix = "go";
+    private readonly string goWin = "go.exe";
+    private readonly string goFmtUnix = "gofmt";
+    private readonly string goFmtWin = "gofmt.exe";
+    private readonly string golangCILintUnix = "golangci-lint";
+    private readonly string goLangCILintWin = "golangci-lint.exe";
+
     public override SdkLanguage Language { get; } = SdkLanguage.Go;
 
     public override async Task<PackageInfo> GetPackageInfo(string packagePath, CancellationToken ct = default)
@@ -42,7 +43,7 @@ public partial class GoLanguageService : LanguageService
         logger.LogDebug("Resolving Go package info for path: {packagePath}", packagePath);
         var (repoRoot, relativePath, fullPath) = Parse(gitHelper, packagePath);
         var (packageName, packageVersion) = await TryGetPackageInfoAsync(fullPath, ct);
-        
+
         if (packageName == null)
         {
             logger.LogWarning("Could not determine package name for Go package at {fullPath}", fullPath);
@@ -51,7 +52,7 @@ public partial class GoLanguageService : LanguageService
         {
             logger.LogWarning("Could not determine package version for Go package at {fullPath}", fullPath);
         }
-        
+
         var model = new PackageInfo
         {
             PackagePath = fullPath,
@@ -60,13 +61,13 @@ public partial class GoLanguageService : LanguageService
             PackageName = packageName,
             PackageVersion = packageVersion,
             ServiceName = Path.GetFileName(Path.GetDirectoryName(fullPath)) ?? string.Empty,
-            Language = Models.SdkLanguage.Go,
+            Language = SdkLanguage.Go,
             SamplesDirectory = fullPath
         };
-        
-        logger.LogDebug("Resolved Go package: {packageName} v{packageVersion} at {relativePath}", 
+
+        logger.LogDebug("Resolved Go package: {packageName} v{packageVersion} at {relativePath}",
             packageName ?? "(unknown)", packageVersion ?? "(unknown)", relativePath);
-        
+
         return model;
     }
 

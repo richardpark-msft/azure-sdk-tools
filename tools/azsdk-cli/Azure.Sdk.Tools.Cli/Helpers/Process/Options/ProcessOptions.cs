@@ -25,6 +25,10 @@ public class ProcessOptions : IProcessOptions
     public List<string> Args { get; } = [];
     public string WorkingDirectory { get; }
     public TimeSpan Timeout { get; }
+
+    /// <summary>
+    /// Echo the output of the command to the console, in addition to capturing it.
+    /// </summary>
     public bool LogOutputStream { get; }
 
     private string shortName;
@@ -47,6 +51,25 @@ public class ProcessOptions : IProcessOptions
         string? workingDirectory = null,
         TimeSpan? timeout = null
     ) : this(command, args, command, args, logOutputStream, workingDirectory, timeout) { }
+
+    /// <summary>
+    /// Create a Process that checks the OS and the proper command (unix vs win). The arguments for the command
+    /// are assumed to be the same between Window and Unix.
+    /// </summary>
+    /// <param name="unix">The binary to run for unix (ie: python)</param>
+    /// <param name="win">The binary to run for linux (ie: python.exe)</param>
+    /// <param name="args">Arguments for the command</param>
+    /// <param name="logOutputStream">true to log</param>
+    /// <param name="workingDirectory"></param>
+    /// <param name="timeout"></param>
+    public ProcessOptions(
+        string unix,
+        string win,
+        string[] args,
+        bool logOutputStream = true,
+        string? workingDirectory = null,
+        TimeSpan? timeout = null
+    ) : this(unix, args, win, args, logOutputStream, workingDirectory, timeout) { }
 
     public ProcessOptions(
         string unixCommand,

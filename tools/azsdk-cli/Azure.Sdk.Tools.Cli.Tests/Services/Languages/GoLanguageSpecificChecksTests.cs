@@ -45,7 +45,6 @@ namespace Azure.Sdk.Tools.Cli.Tests.Services
                 package main
 
                 import (
-                    "github.com/Azure/azure-sdk-for-go/sdk/messaging/azservicebus"      // an unused dep we're going to remove
                     "github.com/Azure/azure-sdk-for-go/sdk/azidentity"
                 )
 
@@ -75,7 +74,9 @@ namespace Azure.Sdk.Tools.Cli.Tests.Services
             Assert.That(identityLine, Is.Not.EqualTo("github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.10.0"));
 
             resp = await LangService.FormatCode(_tempDir.DirectoryPath, false, CancellationToken.None);
-            Assert.That(File.ReadAllText(Path.Join(_tempDir.DirectoryPath, "main.go")), Does.Not.Contain("azservicebus"));
+
+            // in general, we're trying to only use apps that come with the Go SDK.
+            // Assert.That(File.ReadAllText(Path.Join(_tempDir.DirectoryPath, "main.go")), Does.Not.Contain("azservicebus"));
 
             resp = await LangService.BuildProject(_tempDir.DirectoryPath, CancellationToken.None);
             Assert.That(resp.ExitCode, Is.EqualTo(0));
