@@ -12,6 +12,7 @@ using Azure.Sdk.Tools.Cli.Tools.APIView;
 using Azure.Sdk.Tools.Cli.Tools.Package.Samples;
 using Azure.Sdk.Tools.Cli.Tools.Core;
 using Azure.Sdk.Tools.Cli.Tools.Config;
+using Azure.Sdk.Tools.Cli.Tools.Preview;
 
 namespace Azure.Sdk.Tools.Cli.Commands
 {
@@ -50,6 +51,11 @@ namespace Azure.Sdk.Tools.Cli.Commands
             typeof(VerifySetupTool),
             typeof(TestTool),
             typeof(ListCommandTool),
+            // Preview tools
+            typeof(PreviewInitTool),
+            typeof(PreviewRunTool),
+            typeof(PreviewStatusTool),
+            typeof(PreviewUpdateTool),
 #if DEBUG
             // only add these tools in debug mode
             typeof(CleanupTool),

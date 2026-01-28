@@ -85,6 +85,12 @@ namespace Azure.Sdk.Tools.Cli.Commands
             Options: []
         );
 
+        public static readonly CommandGroup Preview = new(
+            Verb: "preview",
+            Description: "Fast multi-language SDK preview from TypeSpec projects",
+            Options: []
+        );
+
 #if DEBUG
         public static readonly CommandGroup Example = new(
             Verb: "example",
