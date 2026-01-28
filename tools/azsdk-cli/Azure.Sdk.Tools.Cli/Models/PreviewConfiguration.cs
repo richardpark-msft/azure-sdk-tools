@@ -134,6 +134,7 @@ public class PreviewConfiguration
         throw new ArgumentException($"Unknown SDK language: {language}");
     }
 
+    // TODO: do we really need this? What are we serializing, and why can't we be strict about the casing?
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
