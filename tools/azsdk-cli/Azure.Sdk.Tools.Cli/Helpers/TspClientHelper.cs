@@ -60,23 +60,24 @@ public class TspClientHelper : ITspClientHelper
     public async Task<TspToolResponse> UpdateGenerationAsync(string tspLocationPath, string outputDirectory, string? commitSha = null, bool isCli = false, CancellationToken ct = default)
     {
         logger.LogInformation("tsp-client update (tsp-location): {loc} -> {out}, commit: {commit}", tspLocationPath, outputDirectory, commitSha ?? "");
-        
+
         if (!File.Exists(tspLocationPath))
         {
-            return new TspToolResponse {
+            return new TspToolResponse
+            {
                 ResponseError = $"tsp-location.yaml not found at path: {tspLocationPath}",
                 TypeSpecProject = outputDirectory
             };
         }
         var workingDir = Path.GetDirectoryName(Path.GetFullPath(tspLocationPath))!;
-        
-        var args = new List<string> { "tsp-client", "update" };
+
+        var args = new List<string> { "tsp-client", "update", "--debug" };
         if (!string.IsNullOrEmpty(commitSha))
         {
             args.Add("--commit");
             args.Add(commitSha);
         }
-        
+
         var npxOptions = new NpxOptions(
             "@azure-tools/typespec-client-generator-cli",
             args.ToArray(),
@@ -109,7 +110,7 @@ public class TspClientHelper : ITspClientHelper
         logger.LogInformation("tsp-client init: {tspConfig} in {workingDir}", tspConfigPath, workingDirectory);
 
         // Build arguments list dynamically
-        var arguments = new List<string> { "tsp-client", "init", "--update-if-exists", "--tsp-config", tspConfigPath };
+        var arguments = new List<string> { "tsp-client", "init", "--debug", "--update-if-exists", "--tsp-config", tspConfigPath };
 
         if (additionalArgs != null && additionalArgs.Length > 0)
         {
@@ -130,14 +131,16 @@ public class TspClientHelper : ITspClientHelper
             return new TspToolResponse
             {
                 ResponseError = "Failed to generate TypeSpec client, see details in the logs." + Environment.NewLine + result.Output,
-                TypeSpecProject = workingDirectory
+                TypeSpecProject = workingDirectory,
+                CommandOutput = result.Output
             };
         }
 
         return new TspToolResponse
         {
             IsSuccessful = true,
-            TypeSpecProject = workingDirectory
+            TypeSpecProject = workingDirectory,
+            CommandOutput = result.Output
         };
     }
 }
