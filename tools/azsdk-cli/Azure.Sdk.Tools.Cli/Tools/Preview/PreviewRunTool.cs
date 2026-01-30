@@ -12,8 +12,14 @@ using Azure.Sdk.Tools.Cli.Models;
 using Azure.Sdk.Tools.Cli.Models.Responses.Preview;
 using Azure.Sdk.Tools.Cli.Services;
 using Azure.Sdk.Tools.Cli.Tools.Core;
+using System.Collections.Concurrent;
 
 namespace Azure.Sdk.Tools.Cli.Tools.Preview;
+
+// TODO: probably rename this to 'generate' or something like that.
+// TODO: at a higher level, I think we should be able to give an overall name to the preview we're generating so you can 
+//       have multiple lines of dev, at once, and just "resume" whenver you feel like it. We could also write a "context" 
+//       file so an agent can pick it up later.
 
 /// <summary>
 /// Tool for generating SDK code from TypeSpec and creating a VS Code workspace for preview.
@@ -211,7 +217,8 @@ public class PreviewRunTool(
                 serviceName: serviceName,
                 typeSpecProjectPath: projectPath,
                 generatedPackages: response.GenerationStatus
-                    .Where(g => g.Value.Success && !string.IsNullOrEmpty(g.Value.PackagePath))
+                    //.Where(g => g.Value.Success && !string.IsNullOrEmpty(g.Value.PackagePath))
+                    .Where(g => !string.IsNullOrEmpty(g.Value.PackagePath))     // TODO: even if it doesn't succeed, it should still be in the workspace.
                     .ToDictionary(g => g.Key, g => g.Value.PackagePath!),
                 ct: ct);
 
@@ -255,17 +262,22 @@ public class PreviewRunTool(
                 response.ResponseError = "Failed to generate preview for any language.";
             }
 
-            // TODO: Implement watch mode in a later phase
-            if (watch)
+            // Handle watch mode
+            if (watch && isCli)
             {
                 response.WatchModeActive = true;
-                if (isCli)
-                {
-                    Console.WriteLine();
-                    Console.WriteLine($"[Watch mode enabled - press Ctrl+C to stop]");
-                    Console.WriteLine($"Watching for changes in {typeSpecRelativePath}/**/*.tsp");
-                }
-                // Watch mode implementation will be added in Phase 5
+                Console.WriteLine();
+                Console.WriteLine($"[Watch mode enabled - press Ctrl+C to stop]");
+                Console.WriteLine($"Watching for changes in {typeSpecRelativePath}/**/*.tsp and tspconfig.yaml");
+                Console.WriteLine();
+
+                await RunWatchModeAsync(
+                    projectPath,
+                    tspConfigPath,
+                    targetLanguages,
+                    build,
+                    response,
+                    ct);
             }
 
             return response;
@@ -303,13 +315,28 @@ public class PreviewRunTool(
             additionalArgs: null,
             ct: ct);
 
-        if (!result.IsSuccessful)
-        {
-            return (false, null, result.ResponseError ?? "Generation failed", null, null);
-        }
-
         // Try to determine the output package path
         var packagePath = await DeterminePackagePathAsync(language, repoPath, projectPath, ct);
+
+        // Write the build log to the package folder if we have one
+        if (!string.IsNullOrEmpty(packagePath) && !string.IsNullOrEmpty(result.CommandOutput))
+        {
+            try
+            {
+                var logPath = Path.Combine(packagePath, "typespec-emitter-build.log");
+                await File.WriteAllTextAsync(logPath, result.CommandOutput, ct);
+                logger.LogDebug("Wrote TypeSpec emitter build log to {LogPath}", logPath);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to write TypeSpec emitter build log for {Language}", language);
+            }
+        }
+
+        if (!result.IsSuccessful)
+        {
+            return (false, packagePath, result.ResponseError ?? "Generation failed", null, null);
+        }
 
         // Build if requested
         bool? buildSuccess = null;
@@ -432,4 +459,224 @@ public class PreviewRunTool(
         SdkLanguage.Go => "Go",
         _ => language.ToString()
     };
+
+    /// <summary>
+    /// Runs the file watcher in watch mode, regenerating SDK code when TypeSpec files change.
+    /// </summary>
+    private async Task RunWatchModeAsync(
+        string projectPath,
+        string tspConfigPath,
+        List<SdkLanguage> targetLanguages,
+        bool build,
+        PreviewRunResponse response,
+        CancellationToken ct)
+    {
+        const int DebounceDelayMs = 1500; // Wait 1.5 seconds after last change before regenerating
+
+        using var watcher = new FileSystemWatcher(projectPath)
+        {
+            IncludeSubdirectories = true,
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.FileName | NotifyFilters.CreationTime
+        };
+
+        var debounceTimer = new System.Timers.Timer(DebounceDelayMs) { AutoReset = false };
+        var changedFiles = new ConcurrentBag<string>();
+        var isRegenerating = false;
+        var regenerationLock = new object();
+
+        debounceTimer.Elapsed += async (sender, e) =>
+        {
+            // Collect changed files and clear the bag
+            var files = new List<string>();
+            while (changedFiles.TryTake(out var file))
+            {
+                files.Add(file);
+            }
+
+            if (files.Count == 0)
+            {
+                return;
+            }
+
+            lock (regenerationLock)
+            {
+                if (isRegenerating)
+                {
+                    return;
+                }
+                isRegenerating = true;
+            }
+
+            try
+            {
+                var distinctFiles = files.Distinct().ToList();
+                var timestamp = DateTime.Now.ToString("HH:mm:ss");
+
+                Console.WriteLine();
+                Console.WriteLine($"[{timestamp}] Detected {distinctFiles.Count} file change(s):");
+                foreach (var file in distinctFiles.Take(5))
+                {
+                    var relativePath = Path.GetRelativePath(projectPath, file);
+                    Console.WriteLine($"  • {relativePath}");
+                }
+                if (distinctFiles.Count > 5)
+                {
+                    Console.WriteLine($"  ... and {distinctFiles.Count - 5} more");
+                }
+
+                Console.WriteLine();
+                Console.WriteLine($"[{timestamp}] Regenerating SDK code...");
+
+                await RegenerateAsync(tspConfigPath, projectPath, targetLanguages, build, response, ct);
+
+                timestamp = DateTime.Now.ToString("HH:mm:ss");
+                Console.WriteLine($"[{timestamp}] Regeneration complete. Watching for changes...");
+            }
+            catch (Exception ex)
+            {
+                var timestamp = DateTime.Now.ToString("HH:mm:ss");
+                Console.WriteLine($"[{timestamp}] Error during regeneration: {ex.Message}");
+                logger.LogError(ex, "Error during watch mode regeneration");
+            }
+            finally
+            {
+                lock (regenerationLock)
+                {
+                    isRegenerating = false;
+                }
+            }
+        };
+
+        void OnFileChanged(object sender, FileSystemEventArgs e)
+        {
+            // Only watch .tsp files and tspconfig.yaml
+            if (!IsWatchedFile(e.FullPath))
+            {
+                return;
+            }
+
+            changedFiles.Add(e.FullPath);
+
+            // Reset the debounce timer
+            debounceTimer.Stop();
+            debounceTimer.Start();
+        }
+
+        void OnFileRenamed(object sender, RenamedEventArgs e)
+        {
+            if (!IsWatchedFile(e.FullPath) && !IsWatchedFile(e.OldFullPath))
+            {
+                return;
+            }
+
+            changedFiles.Add(e.FullPath);
+
+            debounceTimer.Stop();
+            debounceTimer.Start();
+        }
+
+        watcher.Changed += OnFileChanged;
+        watcher.Created += OnFileChanged;
+        watcher.Deleted += OnFileChanged;
+        watcher.Renamed += OnFileRenamed;
+
+        watcher.EnableRaisingEvents = true;
+
+        // Wait for cancellation
+        try
+        {
+            await Task.Delay(Timeout.Infinite, ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected when Ctrl+C is pressed
+            Console.WriteLine();
+            Console.WriteLine("Watch mode stopped.");
+        }
+        finally
+        {
+            debounceTimer.Stop();
+            debounceTimer.Dispose();
+            watcher.EnableRaisingEvents = false;
+        }
+    }
+
+    /// <summary>
+    /// Determines if a file path should trigger regeneration.
+    /// </summary>
+    private static bool IsWatchedFile(string filePath)
+    {
+        var fileName = Path.GetFileName(filePath);
+
+        // Watch tspconfig.yaml
+        if (fileName.Equals("tspconfig.yaml", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Watch .tsp files
+        if (filePath.EndsWith(".tsp", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Regenerates SDK code for all target languages (used in watch mode).
+    /// </summary>
+    private async Task RegenerateAsync(
+        string tspConfigPath,
+        string projectPath,
+        List<SdkLanguage> targetLanguages,
+        bool build,
+        PreviewRunResponse response,
+        CancellationToken ct)
+    {
+        var generationTasks = targetLanguages.Select(async lang =>
+        {
+            var startTime = DateTime.UtcNow;
+            try
+            {
+                var result = await GenerateForLanguageAsync(lang, tspConfigPath, projectPath, build, ct);
+                var duration = DateTime.UtcNow - startTime;
+
+                var statusIcon = result.Success ? "✓" : "✗";
+                var info = result.Success ? $"({duration.TotalSeconds:F1}s)" : result.Error;
+                Console.WriteLine($"  {statusIcon} {GetLanguageDisplayName(lang),-12} {info}");
+
+                return (Language: lang, Status: new GenerationStatus
+                {
+                    Success = result.Success,
+                    PackagePath = result.PackagePath,
+                    Error = result.Error,
+                    Duration = duration,
+                    BuildSuccess = result.BuildSuccess,
+                    BuildError = result.BuildError
+                });
+            }
+            catch (Exception ex)
+            {
+                var duration = DateTime.UtcNow - startTime;
+                logger.LogError(ex, "Failed to generate for {Language}", lang);
+
+                Console.WriteLine($"  ✗ {GetLanguageDisplayName(lang),-12} {ex.Message}");
+
+                return (Language: lang, Status: new GenerationStatus
+                {
+                    Success = false,
+                    Error = ex.Message,
+                    Duration = duration
+                });
+            }
+        });
+
+        var results = await Task.WhenAll(generationTasks);
+
+        foreach (var result in results)
+        {
+            response.GenerationStatus[result.Language] = result.Status;
+        }
+    }
 }
